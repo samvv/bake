@@ -1,0 +1,44 @@
+{
+  "name": "bakejs",
+  "version": "1.0.0",
+  "description": "A flexible task runner for NodeJS",
+  "main": "dist/index.js",
+  "bin": {
+    "bake": "lib/bin/bake.js"
+  },
+  "scripts": {
+    "prepare": "tsc",
+    "watch:compile": "tsc -w --preserveWatchOutput",
+    "test": "ava"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samvv/BakeJS.git"
+  },
+  "keywords": [
+    "task-runner",
+    "shell",
+    "automation",
+    "development",
+    "tool",
+    "concurrency"
+  ],
+  "author": "Sam Vervaeck",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/samvv/BakeJS/issues"
+  },
+  "homepage": "https://github.com/samvv/BakeJS#readme",
+  "devDependencies": {
+    "@types/fs-extra": "^9.0.7",
+    "@types/minimatch": "^3.0.3",
+    "@types/node": "^14.14.28",
+    "@types/yargs": "^16.0.0"
+  },
+  "dependencies": {
+    "fs-extra": "^9.1.0",
+    "minimatch": "^3.0.4",
+    "node-pty": "^0.10.0",
+    "yargs": "^16.2.0"
+  }
+}

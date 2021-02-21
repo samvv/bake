@@ -1,6 +1,8 @@
 
+import { cyanBright } from "chalk";
 import fs from "fs-extra";
 import path from "path";
+import stream from "stream";
 
 export type JsonArray = Array<Json>;
 export type JsonObject = { [key: string]: Json }
@@ -52,3 +54,38 @@ export function splitLines(str: string): string[] {
   return lines;
 }
 
+interface PrefixTransformOptions extends stream.TransformOptions{
+  prefix: string;
+}
+
+function isNewLine(ch: string): boolean {
+  return ch === '\n';
+}
+
+export class PrefixTransformStream extends stream.Transform {
+
+  private atBlankLine = true;
+  private prefix: string;
+
+  constructor({ prefix, ...opts }: PrefixTransformOptions) {
+    super(opts);
+    this.prefix = prefix;
+  }
+
+  _transform(chunk: any, encoding: BufferEncoding, callback: stream.TransformCallback) {
+    if (encoding as string === 'buffer') {
+      chunk = chunk.toString('utf8')
+    }
+    let out = '';
+    for (const ch of chunk) {
+      if (this.atBlankLine) {
+        out += this.prefix;
+      }
+      this.atBlankLine = isNewLine(ch);
+      out += ch;
+    }
+    this.push(out);
+    callback();
+  }
+
+}

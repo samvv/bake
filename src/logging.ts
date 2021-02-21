@@ -11,3 +11,7 @@ export function verbose(message: string): void {
   }
 }
 
+export function info(message: string): void {
+  console.info(message);
+}
+

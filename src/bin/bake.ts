@@ -2,6 +2,7 @@
 
 import path from "path";
 import cp from "child_process";
+import fs from "fs";
 
 import npmWhich from "npm-which";
 import yargs from "yargs";
@@ -19,7 +20,8 @@ import {
 } from "../util";
 import {
   error,
-  info
+  info,
+  verbose
 } from "../logging";
 import {
   evalShellCommand,
@@ -104,100 +106,139 @@ interface TaskInfo {
 
 type PackageJsonScripts = { [name: string]: string }
 
-yargs
-  .command(
-    '$0 [tasks..]',
-    'Run tasks',
-    yargs => yargs
-      .string('work-dir')
-      .describe('work-dir', 'Act as if run from this directory')
-      .default('work-dir', '.')
-      .alias('work-dir', 'C'),
-    async (args) => {
-
-      const expectedTaskNames = toArray(args.tasks as string | string[]);
-      const cwd = path.resolve(args['work-dir']);
-
-      if (expectedTaskNames.length === 0) { 
-        expectedTaskNames.push('bake');
-      }
-
-      const packageJsonPath = await upsearch('package.json', cwd);
-      if (packageJsonPath === null) {
-        error(`no package.json found in this directory or any of the parent directories.`);
-        return 1;
-      }
-      const packageDir = path.dirname(packageJsonPath);
-
-      const packageJson = await readJson(packageJsonPath) as JsonObject;
-
-      let scripts: PackageJsonScripts = {};
-      if (packageJson.scripts !== undefined) {
-        if (!isObject(packageJson.scripts)) {
-          error(`'scripts' field in package.json is not a JSON object`);
-          return 1;
-        }
-        scripts = packageJson.scripts as PackageJsonScripts;
-      }
-
-      const tasksToRun = Object.keys(scripts)
-        .filter(taskName => matchTaskName(taskName, expectedTaskNames));
-
-      if (tasksToRun.length === 0) {
-        error(Object.keys(scripts).length === 0
-            ? `no tasks were defined in package.json. Specify tasks using the 'scripts' field.`
-            : `no tasks matched the specified filter.`);
-        return 1;
-      }
-
-      let didSpawnProcess = false;
-
-      const runTask = (taskName: string): Promise<number | null> => {
-
-        const commandStr = scripts[taskName];
-
-        if (commandStr === undefined) {
-          error(`no task named '${taskName}' found.`)
-          return Promise.resolve(1);
-        }
-
-        return evalShellCommand(commandStr, {
-          cwd: packageDir,
-          extraBuiltins: {
-            async bake(argv) {
-              const exitCodes = await Promise.all(argv.slice(1).map(runTask));
-              return exitCodes.every(code => code === 0)
-                  ? 0 : 1;
-            }
-          },
-          spawn: (args, opts) => {
-            didSpawnProcess = true;
-            return spawnWithPrefix(args, {
-              prefix: chalk.bold.white(` ${taskName} `),
-              ...opts
-            });
-          },
-        });
-
-      }
-
-      const exitCodes = await Promise.all(tasksToRun.map(runTask));
-
-      if (exitCodes.some(code => code !== 0)) {
-        error(`Some tasks failed with a non-zero exit code.`);
-        return 1;
-      }
-
-      // When the user runs bake, it is reasonable to expect that she/he wants
-      // someting to happen. For this reason we inform the user when nothing
-      // is run.
-      if (!didSpawnProcess) {
-        info(`no processes were spawned during the invocation of Bake`);
-      }
-
-      // info(`Build completed.`)
-
+function parseFlag(flag: string) {
+  let i;
+  for (i = 0; i < flag.length; i++) {
+    if (flag[i] !== '-') {
+      break;
     }
-  )
-  .argv
+  }
+  const k = flag.indexOf('=', i);
+  let flagName;
+  let flagValue;
+  if (k !== null) {
+    flagName = flag.substr(i, k);
+    flagValue = flag.substr(k+1);
+  } else {
+    flagName = flag.substr(i);
+    flagValue = k;
+  }
+  return [ flagName, flagValue ];
+}
+
+async function invoke(args: string[]) {
+
+  let cwd = '.';
+  const expectedTaskNames: string[] = [];
+
+  let i;
+
+  for (i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('-')) {
+      let [flagName, flagValue] = parseFlag(arg);
+      if (flagName === 'C' || flagName === 'work-dir') {
+        if (flagValue === null) {
+          flagValue = args[++i];
+          if (flagValue === undefined) {
+            error(`${arg} did not receive a value`);
+            return 1;
+          }
+        }
+        cwd = flagValue;
+      } else {
+        error(`${arg} was not recognised as a valid command-line flag by Bake`)
+        return 1;
+      }
+    } else {
+      expectedTaskNames.push(arg);
+    }
+  }
+
+  const bakeBinPath = npmWhich(cwd).sync('bake');
+
+  if (bakeBinPath && fs.realpathSync(__filename) !== fs.realpathSync(bakeBinPath)) {
+    verbose(`Re-spawning with local installation of Bake`);
+    const exitCode = cp.spawnSync(bakeBinPath, args, {
+      stdio: 'inherit',
+    }).status;
+    return exitCode === null ? 1 : exitCode;
+  }
+
+  if (expectedTaskNames.length === 0) { 
+    expectedTaskNames.push('bake');
+  }
+
+  const packageJsonPath = await upsearch('package.json', cwd);
+  if (packageJsonPath === null) {
+    error(`no package.json found in this directory or any of the parent directories.`);
+    return 1;
+  }
+  const packageDir = path.dirname(packageJsonPath);
+
+  const packageJson = await readJson(packageJsonPath) as JsonObject;
+
+  let scripts: PackageJsonScripts = {};
+  if (packageJson.scripts !== undefined) {
+    if (!isObject(packageJson.scripts)) {
+      error(`'scripts' field in package.json is not a JSON object`);
+      return 1;
+    }
+    scripts = packageJson.scripts as PackageJsonScripts;
+  }
+
+  const tasksToRun = Object.keys(scripts)
+    .filter(taskName => matchTaskName(taskName, expectedTaskNames));
+
+  if (tasksToRun.length === 0) {
+    error(Object.keys(scripts).length === 0
+        ? `no tasks were defined in package.json. Specify tasks using the 'scripts' field.`
+        : `no tasks matched the specified filter ${expectedTaskNames.map(taskName => `'${taskName}'`).join(' ')}.`);
+    return 1;
+  }
+
+  let didSpawnProcess = false;
+
+  const runTask = (taskName: string): Promise<number | null> => {
+
+    const commandStr = scripts[taskName];
+
+    if (commandStr === undefined) {
+      error(`no task named '${taskName}' found.`)
+      return Promise.resolve(1);
+    }
+
+    return evalShellCommand(commandStr, {
+      cwd: packageDir,
+      extraBuiltins: {
+        async bake(argv) {
+          return invoke(argv.slice(1));
+        }
+      },
+      spawn: (args, opts) => {
+        return spawnWithPrefix(args, {
+          prefix: chalk.bold.white(` ${taskName} `),
+          ...opts
+        });
+      },
+    });
+
+  }
+
+  const exitCodes = await Promise.all(tasksToRun.map(runTask));
+
+  if (exitCodes.some(code => code !== 0)) {
+    error(`some tasks failed with a non-zero exit code.`);
+    return 1;
+  }
+
+  verbose(`Bake completed the following tasks: ${expectedTaskNames.join(' ')}.`)
+
+  return 0;
+
+}
+
+invoke(process.argv.slice(2)).then(exitCode => {
+  process.exit(exitCode);
+});
 

@@ -541,45 +541,69 @@ export function evalShellCommand(command: string | ShellCommand, {
     command = parseShellCommand(command);
   }
 
-  switch (command.type) {
+  return visit(command);
 
-    case ShellNodeType.SpawnCommand:
+  async function visit(command: ShellCommand): Promise<number | null> {
 
-      // The full list of process arguments for spawn() will be stored in this
-      // variable.
-      const argv: string[] = [];
+    switch (command.type) {
 
-      // Populate argv by evaluating each parsed expression in the command.
-      // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
-      // then we split the result and add each part as a seperate argument.
-      // If the expression is not hoistable (e.g. the literal '"foo bar bax")
-      // then we just add it as a single big argument.
-      for (const arg of command.args) {
-        for (const expr of arg) {
-          const result = evalShellExpr(expr, { env });
-          if (shouldHoist(expr)) {
-            for (const chunk of result.split(' ')) {
-              argv.push(chunk);
+      case ShellNodeType.SpawnCommand:
+
+        // The full list of process arguments for spawn() will be stored in this
+        // variable.
+        const argv: string[] = [];
+
+        // Populate argv by evaluating each parsed expression in the command.
+        // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
+        // then we split the result and add each part as a seperate argument.
+        // If the expression is not hoistable (e.g. the literal '"foo bar bax")
+        // then we just add it as a single big argument.
+        for (const arg of command.args) {
+          for (const expr of arg) {
+            const result = evalShellExpr(expr, { env });
+            if (shouldHoist(expr)) {
+              for (const chunk of result.split(' ')) {
+                argv.push(chunk);
+              }
+            } else {
+              argv.push(result);
             }
-          } else {
-            argv.push(result);
           }
         }
-      }
 
-      // First we check if there is a builtin with the given name. We always
-      // give priority to the builtin, so return early if found.
-      const builtin = builtins[argv[0]];
-      if (builtin !== undefined) {
-        return builtin(argv);
-      }
+        // First we check if there is a builtin with the given name. We always
+        // give priority to the builtin, so return early if found.
+        const builtin = builtins[argv[0]];
+        if (builtin !== undefined) {
+          return builtin(argv);
+        }
 
-      // Use the user-provided spawn-function to run an external process and
-      // return its promise.
-      return spawn(argv, { env, cwd });
+        // Use the user-provided spawn-function to run an external process and
+        // return its promise.
+        return spawn(argv, { env, cwd });
 
-    default:
-      throw new Error(`Could not evaluate shell command: unknown node`);
+      case ShellNodeType.AndCommand:
+        {
+          const exitCode = await visit(command.left);
+          if (exitCode !== 0) {
+            return exitCode;
+          }
+          return visit(command.right);
+        }
+
+      case ShellNodeType.OrCommand:
+        {
+          const exitCode = await visit(command.left);
+          if (exitCode === 0) {
+            return 0;
+          }
+          return visit(command.right);
+        }
+
+      default:
+        throw new Error(`Could not evaluate shell command: unknown node`);
+
+    }
 
   }
 

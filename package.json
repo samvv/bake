@@ -8,9 +8,9 @@
   },
   "scripts": {
     "prepare": "tsc",
-    "tsc-watch": "tsc -w --preserveWatchOutput",
-    "ava-watch": "ava --watch",
-    "dev": "bake tsc-watch ava-watch",
+    "watch:compile": "tsc -w --preserveWatchOutput",
+    "watch:test": "ava --watch",
+    "bake": "bake watch",
     "test": "ava"
   },
   "repository": {

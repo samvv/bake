@@ -1,14 +1,16 @@
 {
   "name": "@samvv/bake",
   "version": "0.1.0",
-  "description": "A flexible task runner for NodeJS",
+  "description": "Supercharge your build scripts in package.json",
   "main": "dist/index.js",
   "bin": {
     "bake": "lib/bin/bake.js"
   },
   "scripts": {
     "prepare": "tsc",
-    "watch:compile": "tsc -w --preserveWatchOutput",
+    "tsc-watch": "tsc -w --preserveWatchOutput",
+    "ava-watch": "ava --watch",
+    "dev": "bake tsc-watch ava-watch",
     "test": "ava"
   },
   "repository": {
@@ -33,12 +35,15 @@
     "@types/fs-extra": "^9.0.7",
     "@types/minimatch": "^3.0.3",
     "@types/node": "^14.14.28",
-    "@types/yargs": "^16.0.0"
+    "@types/npm-which": "^3.0.0",
+    "@types/yargs": "^16.0.0",
+    "ava": "^3.15.0"
   },
   "dependencies": {
     "chalk": "^4.1.0",
     "fs-extra": "^9.1.0",
     "minimatch": "^3.0.4",
+    "npm-which": "^3.0.1",
     "yargs": "^16.2.0"
   }
 }

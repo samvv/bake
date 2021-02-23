@@ -1,0 +1,7 @@
+*
+!/src/*
+!/lib/*
+!LICENSE
+!README.md
+!tsconfig.json
+!package.json

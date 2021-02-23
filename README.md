@@ -1,9 +1,9 @@
 Bake
 ====
 
-Bake supercharges the`scripts` entry in your `package.json`. Using Bake, you
-can use Bash scripts on any platform and start up your development server in
-seconds and keep your log files clean.
+Bake supercharges the `scripts` entry in your `package.json`. Using Bake, you
+can parallelize your build with very little effort and keep your log files
+clean. Oh, and you also get full support for Bash scripts, even on Windows!
 
 ## How It Works
 

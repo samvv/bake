@@ -27,10 +27,6 @@ import {
   SpawnOptions
 } from "../shell";
 
-function isEmpty(iterable: Iterable<any>): boolean {
-  return iterable[Symbol.iterator]().next().done!;
-}
-
 function countChars(str: string, needle: string) {
   let count = 0;
   for (const ch of str) {
@@ -199,113 +195,7 @@ yargs
         info(`no processes were spawned during the invocation of Bake`);
       }
 
-      info(`Build completed.`)
-
-          //const visit = (
-          //  node: ShellCommand,
-          //  dependencies: TaskInfo[],
-          //  checkExitCode = true,
-          //  shouldFail = false
-          //): TaskInfo[] => {
-
-          //  switch (node.type) {
-
-          //    case ShellNodeType.SpawnCommand:
-
-          //      if (node.args[0].length === 1
-          //        && node.args[0][0].type === ShellNodeType.TextExpr
-          //        && node.args[0][0].text === 'bake') {
-
-          //      }
-
-          //      return [{
-          //        type: 'spawn',
-          //        name: taskName as string,
-          //        command: node,
-          //        before: dependencies.map(dep => dep.name),
-          //        after: [],
-          //        checkExitCode,
-          //        shouldFail,
-          //      }];
-
-          //    case ShellNodeType.AndCommand:
-          //      {
-          //        const beforeTasks = visit(node.left, dependencies, true, shouldFail);
-          //        return visit(node.right, beforeTasks);
-          //      }
-
-          //    case ShellNodeType.OrCommand:
-          //      {
-          //        const beforeTasks = visit(node.left, dependencies, false, shouldFail);
-          //        return visit(node.right, beforeTasks);
-          //      }
-
-          //    case ShellNodeType.NotCommand:
-          //      return visit(node.command, dependencies, checkExitCode, !shouldFail);
-
-          //  }
-
-      //    }
-
-      //    visit(command, []);
-
-      //  }
-
-      //}
-
-      // Index tasks by their name. This is needed because task.before and
-      // task.after reference other tasks by their name alone.
-      //const tasksByName = Object.create(null);
-      //for (const task of tasks) {
-      //  tasksByName[task.name] = task;
-      //}
-
-      //// Build a simple graph where task.before and task.after are merged
-      //// together into the same edges.
-      //const taskGraph = new StringGraph()
-      //for (const task of tasks) {
-      //  taskGraph.addVertex(task.name);
-      //  for (const beforeTaskName of task.before) {
-      //    taskGraph.addEdge(task.name, beforeTaskName);
-      //  }
-      //  for (const afterTaskName of task.after) {
-      //    taskGraph.addEdge(afterTaskName, task.name);
-      //  }
-      //}
-
-      //const runTaskChain = async (tasks: TaskInfo[]) => {
-
-      //  // Run the tasks and halt if there was any kind of error. runTask()
-      //  // should be responsible for reporting the correct error message.
-      //  try {
-      //    await Promise.all(tasks.map(task => runTask(task, { cwd: packageDir })));
-      //  } catch (e) {
-      //    return;
-      //  }
-
-      //  // Calculate the next tasks that should be run simply by traversing
-      //  // the graph.
-      //  const nextTasks: TaskInfo[] = [];
-      //  for (const task of tasks) {
-      //    for (const taskName of taskGraph.getIncoming(task.name)) {
-      //        const task = tasksByName[taskName];
-      //        nextTasks.push(task);
-      //    }
-      //  }
-
-      //  // Ready to process the next batch of tasks.
-      //  await runTaskChain(nextTasks);
-
-      //}
-
-      //// Find the tasks that have no dependencies and launch them first. If
-      //// they completed, runTaskChain() will automatically make sure the next
-      //// tasks are run.
-      //await Promise.all(
-      //  tasks
-      //    .filter(task => isEmpty(taskGraph.getOutgoing(task.name)))
-      //    .map(task => runTaskChain([ task ]))
-      //)
+      // info(`Build completed.`)
 
     }
   )

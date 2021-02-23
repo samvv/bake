@@ -19,11 +19,14 @@
   },
   "keywords": [
     "task-runner",
+    "concurrent",
+    "parallel",
+    "bash",
+    "sh",
     "shell",
     "automation",
     "development",
-    "tool",
-    "concurrency"
+    "tool"
   ],
   "author": "Sam Vervaeck",
   "license": "MIT",

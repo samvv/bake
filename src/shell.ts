@@ -1,3 +1,4 @@
+import { Interface } from "readline";
 
 const EOF = '';
 
@@ -37,7 +38,7 @@ export class ShellToken {
 export enum ShellNodeType {
   TextExpr,
   RefExpr,
-  StringLiteralExpr,
+  StringExpr,
   TemplateStringExpr,
   SpawnCommand,
   AndCommand,
@@ -59,9 +60,25 @@ export interface RefShellExpr extends ShellNodeBase {
   name: string;
 }
 
+export interface StringShellExpr extends ShellNodeBase {
+  type: ShellNodeType.StringExpr;
+  text: string;
+}
+
+export type TemplateStringShellExprElement
+  = RefShellExpr
+  | TextShellExpr
+
+export interface TemplateStringShellExpr extends ShellNodeBase {
+  type: ShellNodeType.TemplateStringExpr;
+  elements: TemplateStringShellExprElement[];
+}
+
 export type ShellExpr
   = TextShellExpr
   | RefShellExpr
+  | StringShellExpr
+  | TemplateStringShellExpr
 
 export type ShellNode
   = TextShellExpr
@@ -482,7 +499,7 @@ export interface EvalShellCommandOptions {
 }
 
 function shouldHoist(expr: ShellExpr): boolean {
-  return expr.type !== ShellNodeType.StringLiteralExpr
+  return expr.type !== ShellNodeType.StringExpr
       && expr.type !== ShellNodeType.TemplateStringExpr;
 }
 

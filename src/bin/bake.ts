@@ -1,13 +1,35 @@
 #!/usr/bin/env node
 
 import path from "path";
+import cp from "child_process";
+
+import npmWhich from "npm-which";
 import yargs from "yargs";
 import Minimatch from "minimatch";
-import { PrefixTransformStream, toArray, upsearch, readJson, JsonObject, isObject } from "../util";
-import { error, info } from "../logging";
-import { TmuxSession } from "../tmux";
-import { spawn } from "child_process";
 import chalk from "chalk";
+
+import {
+  PrefixTransformStream,
+  toArray,
+  upsearch,
+  readJson,
+  JsonObject,
+  isObject,
+  shellJoin
+} from "../util";
+import {
+  error,
+  info
+} from "../logging";
+import {
+  evalShellCommand,
+  ShellCommand,
+  SpawnOptions
+} from "../shell";
+
+function isEmpty(iterable: Iterable<any>): boolean {
+  return iterable[Symbol.iterator]().next().done!;
+}
 
 function countChars(str: string, needle: string) {
   let count = 0;
@@ -33,6 +55,57 @@ function matchTaskName(taskName: string, expected: string[]): boolean {
   return false;
 }
 
+function spawnWithPrefix(argv: string[], {
+  cwd = process.cwd(),
+  env = process.env,
+  prefix = '',
+}: SpawnOptions & { prefix?: string }): Promise<number | null> {
+
+  return new Promise((accept, reject) => {
+
+    const [progName, ...args] = argv;
+
+    const progPath = npmWhich.sync(progName, { cwd });
+
+    const childProcess = cp.spawn(progPath, args, {
+      cwd,
+      env,
+      stdio: [ 'inherit', 'pipe', 'pipe' ]
+    });
+
+    childProcess.stdout
+      .pipe(new PrefixTransformStream({ prefix }))
+      .pipe(process.stdout)
+
+    childProcess.stderr
+      .pipe(new PrefixTransformStream({ prefix }))
+      .pipe(process.stderr)
+
+    childProcess.once('exit', code => {
+      if (code !== 0) {
+        process.stderr.write(prefix + chalk.red(`Process ${shellJoin(argv)} exited with non-zero exit code ${code}\n`)) 
+      }
+      accept(code);
+    });
+
+    childProcess.on('error', error => {
+      reject(error);
+    });
+
+  });
+
+}
+
+interface TaskInfo {
+  type: 'spawn';
+  name: string;
+  command: ShellCommand;
+  before: string[];
+  after: string[];
+  checkExitCode: boolean;
+  shouldFail: boolean;
+}
+
 type PackageJsonScripts = { [name: string]: string }
 
 yargs
@@ -43,15 +116,15 @@ yargs
       .string('work-dir')
       .describe('work-dir', 'Act as if run from this directory')
       .default('work-dir', '.')
-      .alias('work-dir', 'C')
-      .choices('spawn-mode', [ 'tmux', 'node' ])
-      .describe('spawn-mode', 'Which program to use to manage the processes')
-      .default('spawn-mode', 'node'),
+      .alias('work-dir', 'C'),
     async (args) => {
 
-      const mode = args['spawn-mode'];
       const expectedTaskNames = toArray(args.tasks as string | string[]);
       const cwd = path.resolve(args['work-dir']);
+
+      if (expectedTaskNames.length === 0) { 
+        expectedTaskNames.push('bake');
+      }
 
       const packageJsonPath = await upsearch('package.json', cwd);
       if (packageJsonPath === null) {
@@ -71,68 +144,168 @@ yargs
         scripts = packageJson.scripts as PackageJsonScripts;
       }
 
-      const tasks = [];
-      for (const taskName of Object.keys(scripts)) {
-        if (matchTaskName(taskName, expectedTaskNames)) {
-          tasks.push({
-            type: 'shell',
-            name: taskName,
-            shellCommand: scripts[taskName],
-          });
-        }
-      }
+      const tasksToRun = Object.keys(scripts)
+        .filter(taskName => matchTaskName(taskName, expectedTaskNames));
 
-      if (tasks.length === 0) {
-        error(expectedTaskNames.length === 0
+      if (tasksToRun.length === 0) {
+        error(Object.keys(scripts).length === 0
             ? `no tasks were defined in package.json. Specify tasks using the 'scripts' field.`
             : `no tasks matched the specified filter.`);
         return 1;
       }
 
-      if (mode === 'tmux') {
+      let didSpawnProcess = false;
 
-        const tmux = new TmuxSession({
-          sessionName: 'bake-' + packageJson.name,
+      const runTask = (taskName: string): Promise<number | null> => {
+
+        const commandStr = scripts[taskName];
+
+        if (commandStr === undefined) {
+          error(`no task named '${taskName}' found.`)
+          return Promise.resolve(1);
+        }
+
+        return evalShellCommand(commandStr, {
+          cwd: packageDir,
+          extraBuiltins: {
+            async bake(argv) {
+              const exitCodes = await Promise.all(argv.slice(1).map(runTask));
+              return exitCodes.every(code => code === 0)
+                  ? 0 : 1;
+            }
+          },
+          spawn: (args, opts) => {
+            didSpawnProcess = true;
+            return spawnWithPrefix(args, {
+              prefix: chalk.bold.white(` ${taskName} `),
+              ...opts
+            });
+          },
         });
 
-        for (const task of tasks) {
-          let win = await tmux.findWindowByName(task.name);
-          if (win === null) {
-            info(` • Launching task '${task.name}'`);
-            await tmux.createWindow({
-              name: task.name,
-              detach: true,
-              shellCommand: task.shellCommand,
-            });
-          }
-        }
-
-      } else if (mode === 'node') {
-
-        for (const task of tasks) {
-          const childProcess = spawn(task.shellCommand, {
-            shell: true,
-            cwd: packageDir,
-            stdio: [ 'inherit', 'pipe', 'pipe' ]
-          })
-          childProcess.stdout
-            .pipe(new PrefixTransformStream({
-              prefix: chalk.bold.white(` ${task.name} `)
-            }))
-            .pipe(process.stdout)
-          childProcess.stderr
-            .pipe(new PrefixTransformStream({
-              prefix: chalk.bold.white(` ${task.name} `)
-            }))
-            .pipe(process.stderr)
-        }
-
-      } else {
-
-        error(`Invalid --spawn-mode given. Exiting.`);
-        return 1;
-
       }
+
+      const exitCodes = await Promise.all(tasksToRun.map(runTask));
+
+      if (exitCodes.some(code => code !== 0)) {
+        error(`Some tasks failed with a non-zero exit code.`);
+        return 1;
+      }
+
+      // When the user runs bake, it is reasonable to expect that she/he wants
+      // someting to happen. For this reason we inform the user when nothing
+      // is run.
+      if (!didSpawnProcess) {
+        info(`no processes were spawned during the invocation of Bake`);
+      }
+
+      info(`Build completed.`)
+
+          //const visit = (
+          //  node: ShellCommand,
+          //  dependencies: TaskInfo[],
+          //  checkExitCode = true,
+          //  shouldFail = false
+          //): TaskInfo[] => {
+
+          //  switch (node.type) {
+
+          //    case ShellNodeType.SpawnCommand:
+
+          //      if (node.args[0].length === 1
+          //        && node.args[0][0].type === ShellNodeType.TextExpr
+          //        && node.args[0][0].text === 'bake') {
+
+          //      }
+
+          //      return [{
+          //        type: 'spawn',
+          //        name: taskName as string,
+          //        command: node,
+          //        before: dependencies.map(dep => dep.name),
+          //        after: [],
+          //        checkExitCode,
+          //        shouldFail,
+          //      }];
+
+          //    case ShellNodeType.AndCommand:
+          //      {
+          //        const beforeTasks = visit(node.left, dependencies, true, shouldFail);
+          //        return visit(node.right, beforeTasks);
+          //      }
+
+          //    case ShellNodeType.OrCommand:
+          //      {
+          //        const beforeTasks = visit(node.left, dependencies, false, shouldFail);
+          //        return visit(node.right, beforeTasks);
+          //      }
+
+          //    case ShellNodeType.NotCommand:
+          //      return visit(node.command, dependencies, checkExitCode, !shouldFail);
+
+          //  }
+
+      //    }
+
+      //    visit(command, []);
+
+      //  }
+
+      //}
+
+      // Index tasks by their name. This is needed because task.before and
+      // task.after reference other tasks by their name alone.
+      //const tasksByName = Object.create(null);
+      //for (const task of tasks) {
+      //  tasksByName[task.name] = task;
+      //}
+
+      //// Build a simple graph where task.before and task.after are merged
+      //// together into the same edges.
+      //const taskGraph = new StringGraph()
+      //for (const task of tasks) {
+      //  taskGraph.addVertex(task.name);
+      //  for (const beforeTaskName of task.before) {
+      //    taskGraph.addEdge(task.name, beforeTaskName);
+      //  }
+      //  for (const afterTaskName of task.after) {
+      //    taskGraph.addEdge(afterTaskName, task.name);
+      //  }
+      //}
+
+      //const runTaskChain = async (tasks: TaskInfo[]) => {
+
+      //  // Run the tasks and halt if there was any kind of error. runTask()
+      //  // should be responsible for reporting the correct error message.
+      //  try {
+      //    await Promise.all(tasks.map(task => runTask(task, { cwd: packageDir })));
+      //  } catch (e) {
+      //    return;
+      //  }
+
+      //  // Calculate the next tasks that should be run simply by traversing
+      //  // the graph.
+      //  const nextTasks: TaskInfo[] = [];
+      //  for (const task of tasks) {
+      //    for (const taskName of taskGraph.getIncoming(task.name)) {
+      //        const task = tasksByName[taskName];
+      //        nextTasks.push(task);
+      //    }
+      //  }
+
+      //  // Ready to process the next batch of tasks.
+      //  await runTaskChain(nextTasks);
+
+      //}
+
+      //// Find the tasks that have no dependencies and launch them first. If
+      //// they completed, runTaskChain() will automatically make sure the next
+      //// tasks are run.
+      //await Promise.all(
+      //  tasks
+      //    .filter(task => isEmpty(taskGraph.getOutgoing(task.name)))
+      //    .map(task => runTaskChain([ task ]))
+      //)
 
     }
   )

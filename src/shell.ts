@@ -36,10 +36,13 @@ export class ShellToken {
 
 export enum ShellNodeType {
   TextExpr,
+  RefExpr,
+  StringLiteralExpr,
+  TemplateStringExpr,
   SpawnCommand,
   AndCommand,
   OrCommand,
-  RefExpr,
+  NotCommand,
 }
 
 export interface ShellNodeBase {
@@ -60,9 +63,22 @@ export type ShellExpr
   = TextShellExpr
   | RefShellExpr
 
+export type ShellNode
+  = TextShellExpr
+  | RefShellExpr
+  | AndShellCommand
+  | OrShellCommand
+  | NotShellCommand
+  | SpawnShellCommand
+
 export interface SpawnShellCommand extends ShellNodeBase {
   type: ShellNodeType.SpawnCommand;
   args: ShellArg[];
+}
+
+export interface NotShellCommand extends ShellNodeBase {
+  type: ShellNodeType.NotCommand;
+  command: ShellCommand;
 }
 
 export interface AndShellCommand extends ShellNodeBase {
@@ -87,6 +103,7 @@ export type ShellCommand
   = OrShellCommand
   | AndShellCommand
   | SpawnShellCommand
+  | NotShellCommand
 
 export class LexError extends Error {
 
@@ -445,4 +462,108 @@ export function parseShellCommand(input: string): ShellCommand {
   const lexer = new ShellLexer(input);
   const parser = new ShellParser(lexer);
   return parser.parseCommand()
+}
+
+export type ProcessEnvironment = { [key: string]: string | undefined }
+
+export interface SpawnOptions {
+  cwd?: string;
+  env?: ProcessEnvironment;
+}
+
+type ShellCommandFn = (argv: string[]) => Promise<number>;
+
+export interface EvalShellCommandOptions {
+  spawn(argv: string[], opts?: SpawnOptions): Promise<number | null>;
+  cwd?: string;
+  env?: ProcessEnvironment;
+  extraBuiltins?: { [key: string]: ShellCommandFn; }
+  noDefaultBuiltins?: boolean;
+}
+
+function shouldHoist(expr: ShellExpr): boolean {
+  return expr.type !== ShellNodeType.StringLiteralExpr
+      && expr.type !== ShellNodeType.TemplateStringExpr;
+}
+
+export function evalShellExpr(expr: ShellExpr, {
+  env = process.env,
+}) {
+  switch (expr.type) {
+    case ShellNodeType.TextExpr:
+      return expr.text;
+    case ShellNodeType.RefExpr:
+      return env[expr.name] ?? '';
+    // case ShellNodeType.TemplateStringExpr:
+    //   return expr.elements
+    //     .map(element => expandShellExpr(element, { env }))
+    //     .join('');
+    default:
+        throw new Error(`Could not evaluate shell expression: unknown node type`);
+  }
+
+}
+
+const DEFAULT_BUILTINS = {
+
+}
+
+export function evalShellCommand(command: string | ShellCommand, {
+  spawn,
+  cwd = process.cwd(),
+  env = process.env,
+  extraBuiltins = {},
+  noDefaultBuiltins = false,
+}: EvalShellCommandOptions) {
+
+  const builtins = noDefaultBuiltins
+    ? extraBuiltins
+    : { ...DEFAULT_BUILTINS, ...extraBuiltins }
+
+  if (typeof(command) === 'string') {
+    command = parseShellCommand(command);
+  }
+
+  switch (command.type) {
+
+    case ShellNodeType.SpawnCommand:
+
+      // The full list of process arguments for spawn() will be stored in this
+      // variable.
+      const argv: string[] = [];
+
+      // Populate argv by evaluating each parsed expression in the command.
+      // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
+      // then we split the result and add each part as a seperate argument.
+      // If the expression is not hoistable (e.g. the literal '"foo bar bax")
+      // then we just add it as a single big argument.
+      for (const arg of command.args) {
+        for (const expr of arg) {
+          const result = evalShellExpr(expr, { env });
+          if (shouldHoist(expr)) {
+            for (const chunk of result.split(' ')) {
+              argv.push(chunk);
+            }
+          } else {
+            argv.push(result);
+          }
+        }
+      }
+
+      // First we check if there is a builtin with the given name. We always
+      // give priority to the builtin, so return early if found.
+      const builtin = builtins[argv[0]];
+      if (builtin !== undefined) {
+        return builtin(argv);
+      }
+
+      // Use the user-provided spawn-function to run an external process and
+      // return its promise.
+      return spawn(argv, { env, cwd });
+
+    default:
+      throw new Error(`Could not evaluate shell command: unknown node`);
+
+  }
+
 }

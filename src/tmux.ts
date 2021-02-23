@@ -1,5 +1,5 @@
-import { runCommand, RunCommandOptions } from "./shell";
-import {splitLines} from "./util";
+
+import { splitLines, runCommand, RunCommandOptions } from "./util";
 
 export interface TmuxWindowOptions {
   name?: string;

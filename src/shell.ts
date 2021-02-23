@@ -1,100 +1,448 @@
 
-import cp from "child_process";
+const EOF = '';
 
-import { verbose } from "./logging";
-
-export function shellSplit(command: string): string[] {
-  // FIXME This isn't correct and won't work for a lot of commands
-  return command.split(' ');
+export enum ShellTokenType {
+  NewLine,
+  Blank,
+  EndOfFile,
+  Identifier,
+  AmpAmp,
+  VBarVBar,
+  Dollar,
+  OpenParen,
+  CloseParen,
 }
 
-export function shellJoin(argv: string[]): string {
-  return argv.join(' ');
+function describeToken(type: ShellTokenType) {
+  switch (type) {
+    case ShellTokenType.CloseParen: return "')'";
+    case ShellTokenType.OpenParen: return "'('";
+    case ShellTokenType.Blank: return "some whitespace";
+    case ShellTokenType.Dollar: return "'$'";
+    case ShellTokenType.AmpAmp: return "'&&'";
+    case ShellTokenType.VBarVBar: return "'||'";
+    case ShellTokenType.Identifier: return "some text";
+    case ShellTokenType.EndOfFile: return "end-of-file";
+  }
 }
 
-interface SpawnResult {
-  stderr: string | null;
-  stdout: string | null;
-  code: number | null;
+export class ShellToken {
+
+  constructor(public type: ShellTokenType, public value?: any) {
+
+  }
+
 }
 
-type SpawnTarget = string | string[]
-
-export interface RunCommandOptions extends cp.SpawnOptions {
-  check?: boolean;
+export enum ShellNodeType {
+  TextExpr,
+  SpawnCommand,
+  AndCommand,
+  OrCommand,
+  RefExpr,
 }
 
-export function runCommand(commandOrArgv: SpawnTarget, {
-  check = true,
-  stdio = 'inherit',
-  ...opts
-}: RunCommandOptions = {}): Promise<SpawnResult> {
+export interface ShellNodeBase {
+  type: ShellNodeType;
+}
 
-  let stdinMode;
-  let stdoutMode;
-  let stderrMode;
+export interface TextShellExpr extends ShellNodeBase {
+  type: ShellNodeType.TextExpr;
+  text: string;
+}
 
-  let childProcess: cp.ChildProcess;
-  let shellCommand: string;
+export interface RefShellExpr extends ShellNodeBase {
+  type: ShellNodeType.RefExpr;
+  name: string;
+}
 
-  if (typeof(stdio) === 'string') {
-    stdinMode = stdio;
-    stdoutMode = stdio;
-    stderrMode = stdio;
-  } else if (Array.isArray(stdio)) {
-    stdinMode = stdio[0];
-    stdoutMode = stdio[1];
-    stderrMode = stdio[2];
+export type ShellExpr
+  = TextShellExpr
+  | RefShellExpr
+
+export interface SpawnShellCommand extends ShellNodeBase {
+  type: ShellNodeType.SpawnCommand;
+  args: ShellArg[];
+}
+
+export interface AndShellCommand extends ShellNodeBase {
+  type: ShellNodeType.AndCommand;
+  left: ShellCommand;
+  right: ShellCommand;
+}
+
+export interface OrShellCommand extends ShellNodeBase {
+  type: ShellNodeType.OrCommand;
+  left: ShellCommand;
+  right: ShellCommand;
+}
+
+export type BinaryShellCommand
+  = AndShellCommand
+  | OrShellCommand
+
+export type ShellArg = ShellExpr[];
+
+export type ShellCommand
+  = OrShellCommand
+  | AndShellCommand
+  | SpawnShellCommand
+
+export class LexError extends Error {
+
+}
+
+export class ShellLexer {
+
+  private charBuffer: string[] = [];
+
+  constructor(private text: string, private textOffset = 0) {
+
   }
 
-  if (typeof(commandOrArgv) === 'string') {
-    shellCommand = commandOrArgv;
-    verbose(`Running ${shellCommand}`);
-    childProcess = cp.spawn(commandOrArgv, {
-      stdio,
-      ...opts,
-      shell: true,
-    });
-  } else {
-    shellCommand = shellJoin(commandOrArgv);
-    verbose(`Running ${shellCommand}`);
-    childProcess = cp.spawn(commandOrArgv[0], commandOrArgv.slice(1), {
-      stdio,
-      ...opts
-    });
+  private readChar() {
+    return this.textOffset < this.text.length
+        ? this.text[this.textOffset++]
+        : EOF;
   }
 
-  let stdout: string | null = null;
-  let stderr: string | null = null;
-
-  if (stdoutMode === 'pipe') {
-    stdout = '';
-    childProcess.stdout!.setEncoding('utf8');
-    childProcess.stdout!.on('data', chunk => {
-      stdout += chunk;
-    });
+  private getChar(): string {
+    return this.charBuffer.length > 0 
+      ? this.charBuffer.shift()!
+      : this.readChar();
   }
 
-  if (stderrMode === 'pipe') {
-    stderr = '';
-    childProcess.stderr!.setEncoding('utf8');
-    childProcess.stderr!.on('data', chunk => {
-      stderr += chunk;
-    });
-  }
-
-  return new Promise(accept => {
-    childProcess.on('exit', code => {
-      if (check && code !== 0) {
-        throw new Error(`Process ${shellCommand} exited with non-zero exit code ${code}.`);
+  private peekChar(offset = 1): string {
+    while (this.charBuffer.length < offset) {
+      const ch = this.readChar();
+      if (ch === EOF) {
+        return EOF;
       }
-      accept({
-        code,
-        stdout,
-        stderr,
-      });
-    });
-  });
+      this.charBuffer.push(ch);
+    }
+    return this.charBuffer[offset - 1];
+  }
+
+  private expectChar(expected: string): void {
+    const actual = this.peekChar();
+    if (actual !== expected) {
+      throw new LexError(`Expected character '${expected}' but got '${actual}'`);
+    }
+    this.getChar();
+  }
+
+  public lex() {
+    let escaping = false;
+    let afterBlank = false;
+    for (;;) {
+
+      const ch = this.peekChar();
+
+      // Return early if there are no more characters to be processed. If
+      // afterBlank is true, we just had some dangling whitespace. If escaping
+      // is still true, we probably want to signal an error.
+      if (ch === EOF) {
+        if (escaping) {
+          throw new LexError(`Reached end-of-file while trying to escape a character with '\\'`)
+        }
+        return new ShellToken(ShellTokenType.EndOfFile);
+      }
+
+      // A '\' influences the next character so we simply skip over it and
+      // remember that we encountered it.
+      if (ch === '\\') {
+        this.getChar();
+        escaping = true;
+        continue;
+      }
+
+      // Whitespace cannot be ignored because it seperates command-line
+      // arguments. Above that, a newline is treated differently depending on
+      // whether it was escaped or not.
+      if (/[\t\r ]/.test(ch) || (ch === '\n' && escaping)) {
+        this.getChar();
+        afterBlank = true;
+        continue;
+      }
+
+      // We processed an escaped newline in the previous block, so the only
+      // case that remains is to process a real newline that seperates two
+      // shell commands.
+      if (ch === '\n') {
+        this.getChar();
+        return new ShellToken(ShellTokenType.NewLine);
+      }
+
+      // If we got this far we can be sure there is no more whitespace.
+      // However, the previous characters might have been whitespace or an
+      // escaped newline. We create a special token to indicate the possilbe
+      // start of a new argument.
+      if (afterBlank) {
+        afterBlank = false;
+        return new ShellToken(ShellTokenType.Blank);
+      }
+
+      // The following are all just special characters that are returned as-is.
+      // It is up to the parser to make sense of them.
+
+      if (!escaping && ch === '$') {
+        this.getChar();
+        const c1 = this.peekChar();
+        if (!/[a-z_]/i.test(c1)) {
+          throw new LexError(`Expected '_' or a letter for a variable name but got '${c1}'`)
+        }
+        let name = c1;
+        this.getChar();
+        for (;;) {
+          const c2 = this.peekChar();
+          if (!/[a-z0-9]/i.test(c2)) {
+            break;
+          }
+          name += c2;
+          this.getChar();
+        }
+        return new ShellToken(ShellTokenType.Dollar, name);
+      }
+
+      if (ch === '&') {
+        this.getChar();
+        this.expectChar('&');
+        return new ShellToken(ShellTokenType.AmpAmp);
+      }
+
+      if (ch === '|') {
+        this.getChar();
+        this.expectChar('|');
+        return new ShellToken(ShellTokenType.VBarVBar);
+      }
+
+      // The only thing remaining is pure text. This includes '-' and '_'
+      // because sh treats them as valid identifiers even when given as the
+      // command name.
+      let text = '';
+      if (escaping) {
+        text += unescape(ch);
+        escaping = false;
+      }
+      this.getChar();
+      text += ch;
+      for (;;) {
+        const c1 = this.peekChar();
+        if (c1 === EOF || /[$\t\r\n&| '"]/.test(c1)) {
+          break;
+        }
+        text += c1;
+        this.getChar();
+      }
+      return new ShellToken(ShellTokenType.Identifier, text);
+
+      // If we ended up here then we have no more valid characters left, so the
+      // only sensible thing to do is to report an error.
+      // throw new LexError(`Unexpected character '${ch}'`);
+
+    }
+
+  }
 
 }
 
+export class ParseError extends Error {
+
+}
+
+export class ShellParser {
+
+  private tokenBuffer: ShellToken[] = [];
+
+  constructor(private lexer: ShellLexer) {
+
+  }
+
+  private getToken() {
+    return this.tokenBuffer.length > 0
+      ? this.tokenBuffer.shift()!
+      : this.lexer.lex();
+  }
+
+  private peekToken(offset = 1) {
+    while (this.tokenBuffer.length < offset) {
+      this.tokenBuffer.push(this.lexer.lex());
+    }
+    return this.tokenBuffer[offset-1];
+  }
+
+  private expectToken(expectedType: ShellTokenType) {
+    const token = this.getToken();
+    if (token.type !== expectedType) {
+      throw new ParseError(`Expected ${describeToken(expectedType)} but got ${describeToken(token.type)}`);
+    }
+  }
+
+  private parseExpr(): ShellExpr {
+    const t0 = this.getToken();
+    if (t0.type === ShellTokenType.Dollar) {
+      return { type: ShellNodeType.RefExpr, name: t0.value }
+    } else if (t0.type === ShellTokenType.Identifier) {
+      return { type: ShellNodeType.TextExpr, text: t0.value }
+    } else {
+      throw new ParseError(`Did not expect ${describeToken(t0.type)}`);
+    }
+  }
+
+  private getPrecedence(type: ShellTokenType): number {
+    switch (type) {
+      case ShellTokenType.VBarVBar: return 1;
+      case ShellTokenType.AmpAmp: return 1;
+      default:
+        throw new Error(`Could not get precedence of token type ${ShellTokenType[type]}: not a binary operator`);
+    }
+  }
+
+  private isBinaryOperator(tokenType: ShellTokenType) {
+    return tokenType === ShellTokenType.VBarVBar
+        || tokenType === ShellTokenType.AmpAmp
+  }
+
+  private isRightAssoc(_tokenType: ShellTokenType): boolean {
+    return false;
+  }
+
+  private operatorToExprType(tokenType: ShellTokenType): ShellNodeType {
+    switch (tokenType) {
+      case ShellTokenType.AmpAmp: return ShellNodeType.AndCommand;
+      case ShellTokenType.VBarVBar: return ShellNodeType.OrCommand;
+      default:
+        throw new Error(`Could not convert ${ShellTokenType[tokenType]} to a shell expression type: not a binary operator`);
+    }
+  }
+
+  private parseCommandOperators(lhs: ShellCommand, minPrecedence = 0): ShellCommand {
+
+    // This variable will always contain an operator. If it doesn't the loop
+    // below will stop.
+    let lookahead = this.peekToken();
+
+    for (;;) {
+
+      if (!this.isBinaryOperator(lookahead.type)) {
+        break;
+      }
+
+      // In the nested loop below, everything is matched against this
+      // precedence level because if it does not match, the outer loop should
+      // take over.
+      const fixedPrecedence = this.getPrecedence(lookahead.type);
+
+      if (fixedPrecedence < minPrecedence) {
+        break;
+      }
+
+      // Store the operator so that we know what expression to build later on.
+      const operator = lookahead;
+
+      this.getToken()
+
+      // Do not forget to parse any whitespace that might be between && and the
+      // following command. The lexer cannot know upfront when this special
+      // token is not needed, so the only solution is to explicitly process it
+      // here.
+      if (this.peekToken().type === ShellTokenType.Blank) {
+        this.getToken();
+      }
+
+      let rhs = this.parseCommandPrimitive();
+
+      lookahead = this.peekToken();
+
+      for (;;) {
+
+        if (!this.isBinaryOperator(lookahead.type)) {
+          break;
+        }
+
+        const lookaheadPrecedence = this.getPrecedence(lookahead.type);
+        if (lookaheadPrecedence < fixedPrecedence
+          || (lookaheadPrecedence === fixedPrecedence
+            && !this.isRightAssoc(lookahead.type))) {
+          break;
+        }
+
+        // Build a left-assoctiative expression.
+        rhs = this.parseCommandOperators(rhs, lookaheadPrecedence);
+
+        // Needed in order to keep the invariant that lookahead always points to
+        // the next operator in the token stream.
+        lookahead = this.peekToken();
+
+      }
+
+      // Finally we can build the actual expression where left-associative
+      // expressions have already been dealt with in the nested loop above.
+      lhs = {
+        type: this.operatorToExprType(operator.type),
+        left: lhs,
+        right: rhs,
+      } as BinaryShellCommand
+
+    }
+
+    return lhs;
+
+  }
+
+  public parseCommandInternal(): ShellCommand {
+    return this.parseCommandOperators(this.parseCommandPrimitive());
+  }
+
+  public parseArg(): ShellArg {
+    let elements = [];
+    for (;;) {
+      const t0 = this.peekToken();
+      if ( this.isBinaryOperator(t0.type)
+        || t0.type === ShellTokenType.Blank
+        || t0.type === ShellTokenType.CloseParen
+        || t0.type === ShellTokenType.NewLine
+        || t0.type === ShellTokenType.EndOfFile) {
+        break;
+      }
+      elements.push(this.parseExpr());
+    }
+    return elements;
+  }
+
+  private parseCommandPrimitive(): ShellCommand {
+    const args = [];
+    for (;;) {
+      const t0 = this.peekToken();
+      if ( this.isBinaryOperator(t0.type)
+        || t0.type === ShellTokenType.EndOfFile
+        || t0.type === ShellTokenType.NewLine
+        || t0.type === ShellTokenType.CloseParen) {
+        break;
+      }
+      args.push(this.parseArg());
+      const t1 = this.peekToken();
+      if (this.isBinaryOperator(t0.type)
+        || t1.type === ShellTokenType.EndOfFile
+        || t1.type === ShellTokenType.NewLine
+        || t1.type === ShellTokenType.CloseParen) {
+        break;
+      }
+      this.expectToken(ShellTokenType.Blank)
+    }
+    return { type: ShellNodeType.SpawnCommand, args }
+  }
+
+  public parseCommand(): ShellCommand {
+    const command = this.parseCommandInternal();
+    this.expectToken(ShellTokenType.EndOfFile);
+    return command;
+  }
+
+}
+
+export function parseShellCommand(input: string): ShellCommand {
+  const lexer = new ShellLexer(input);
+  const parser = new ShellParser(lexer);
+  return parser.parseCommand()
+}

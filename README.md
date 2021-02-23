@@ -57,6 +57,16 @@ If you run `bake` with the above configuration your two tasks will run in parall
 
 ## Bugs And Issues
 
+Currently, not everything from the Bash shell is implemented because most are
+very rarely used inside a small npm script. Either way, at least the following
+features are missing:
+
+ - Output redirection such as `2>&1`, `node server.js > log.txt`.
+ - Piping commands, e.g. `cat files.txt | xargs -I{} cp {} dest/`
+ - Many builtins that are available in a standard Bash session
+ - Computed expressions such as `$(($num1 + $num2))`
+ - Control flow statements such `if`, `case` and `while`
+
 If you're having an issue, please take the time to report it in the [issue
 tracker][1]. This will make the tool much more robust and easier for others to
 pick up.

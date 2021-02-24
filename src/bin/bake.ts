@@ -12,9 +12,9 @@ import {
   PrefixTransformStream,
   upsearch,
   readJson,
-  JsonObject,
   isObject,
-  shellJoin
+  shellJoin,
+  getObjectEntries
 } from "../util";
 
 import {
@@ -24,7 +24,6 @@ import {
 
 import {
   evalShellCommand,
-  ShellCommand,
   SpawnOptions
 } from "../shell";
 
@@ -93,7 +92,20 @@ function spawnWithPrefix(argv: string[], {
 
 }
 
+class CLIError extends Error {
+
+}
+
+interface PackageJson {
+  name: string;
+  version: string;
+  description?: string;
+  scripts?: PackageJsonScripts;
+  workspaces?: PackageJsonWorkspaces;
+}
+
 type PackageJsonScripts = { [name: string]: string }
+type PackageJsonWorkspaces = string[];
 
 function parseFlag(flag: string) {
   let i;
@@ -115,9 +127,45 @@ function parseFlag(flag: string) {
   return [ flagName, flagValue ];
 }
 
-async function invoke(args: string[]) {
+interface InvokeOptions {
+  /**
+   * Overrides the current working directory of this invocation. Note that even
+   * if --work-dir=/path/to/foo is provided in the arguments this option will
+   * get priority.
+   */
+  cwd?: string;
+  /**
+   * Whether to give a warning when the user ran Bake and nothing happened.
+   */
+  ignoreEmptyScripts?: boolean;
+}
 
-  let cwd = '.';
+interface TaskInfo {
+  name: string;
+  shellCommand: string;
+  cwd: string;
+}
+
+async function* loadTasks(packageDir: string): AsyncGenerator<TaskInfo> {
+  const packageJson = await readJson(path.join(packageDir, 'package.json')) as unknown as PackageJson;
+  if (packageJson.scripts === undefined) {
+    return [];
+  }
+  if (!isObject(packageJson.scripts)) {
+    throw new CLIError(`'scripts' field in package.json is not a JSON object`);
+  }
+  for (const [scriptName, shellCommand] of getObjectEntries(packageJson.scripts)) {
+    yield {
+      name: scriptName as string,
+      cwd: packageDir,
+      shellCommand,
+    }
+  }
+}
+
+async function invoke(args: string[]): Promise<number> {
+
+  let cwd = process.cwd();
   const expectedTaskNames: string[] = [];
 
   let i;
@@ -134,7 +182,9 @@ async function invoke(args: string[]) {
             return 1;
           }
         }
-        cwd = flagValue;
+        if (cwd === undefined) {
+          cwd = path.resolve(flagValue);
+        }
       } else {
         error(`${arg} was not recognised as a valid command-line flag by Bake`)
         return 1;
@@ -148,9 +198,7 @@ async function invoke(args: string[]) {
 
   if (bakeBinPath && fs.realpathSync(__filename) !== fs.realpathSync(bakeBinPath)) {
     verbose(`Re-spawning with local installation of Bake`);
-    const exitCode = cp.spawnSync(bakeBinPath, args, {
-      stdio: 'inherit',
-    }).status;
+    const exitCode = cp.spawnSync(bakeBinPath, args, { stdio: 'inherit', }).status;
     return exitCode === null ? 1 : exitCode;
   }
 
@@ -165,46 +213,51 @@ async function invoke(args: string[]) {
   }
   const packageDir = path.dirname(packageJsonPath);
 
-  const packageJson = await readJson(packageJsonPath) as JsonObject;
+  const packageJson = await readJson(packageJsonPath) as unknown as PackageJson;
 
-  let scripts: PackageJsonScripts = {};
-  if (packageJson.scripts !== undefined) {
-    if (!isObject(packageJson.scripts)) {
-      error(`'scripts' field in package.json is not a JSON object`);
-      return 1;
+  const tasks = [];
+
+  if (packageJson.workspaces !== undefined) {
+    for (const workspaceDir of packageJson.workspaces) {
+      for await (const task of loadTasks(path.join(packageDir, workspaceDir))) {
+        tasks.push(task);
+      }
     }
-    scripts = packageJson.scripts as PackageJsonScripts;
+  } else {
+    for await (const task of loadTasks(packageDir)) {
+      tasks.push(task);
+    }
   }
 
-  const tasksToRun = Object.keys(scripts)
-    .filter(taskName => matchTaskName(taskName, expectedTaskNames));
+  const tasksToRun = tasks.filter(task =>
+    matchTaskName(task.name, expectedTaskNames));
 
   if (tasksToRun.length === 0) {
-    error(Object.keys(scripts).length === 0
+    error(packageJson.workspaces === undefined
+            && (packageJson.scripts === undefined || Object.keys(packageJson.scripts).length === 0)
         ? `no tasks were defined in package.json. Specify tasks using the 'scripts' field.`
         : `no tasks matched the specified filter ${expectedTaskNames.map(taskName => `'${taskName}'`).join(' ')}.`);
     return 1;
   }
 
-  const runTask = (taskName: string): Promise<number | null> => {
+  const runTask = (task: TaskInfo): Promise<number | null> => {
 
-    const commandStr = scripts[taskName];
+    //if (task.shellCommand === undefined) {
+    //  error(`no task named '${task.name}' found.`)
+    //  return Promise.resolve(1);
+    //}
 
-    if (commandStr === undefined) {
-      error(`no task named '${taskName}' found.`)
-      return Promise.resolve(1);
-    }
-
-    return evalShellCommand(commandStr, {
-      cwd: packageDir,
+    return evalShellCommand(task.shellCommand, {
+      cwd: task.cwd,
       extraBuiltins: {
-        async bake(argv) {
-          return invoke(argv.slice(1));
+        bake(argv, next) {
+          verbose(`Caught ${shellJoin(argv)}`);
+          invoke(argv.slice(1)).then(next);
         }
       },
       spawn: (args, opts) => {
         return spawnWithPrefix(args, {
-          prefix: chalk.bold.white(` ${taskName} `),
+          prefix: chalk.bold.white(` ${task.name} `),
           ...opts
         });
       },

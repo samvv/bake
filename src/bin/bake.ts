@@ -231,7 +231,7 @@ async function bake(expectedTaskNames: string[], {
       extraBuiltins: {
         bake(argv, next) {
           verbose(`Caught ${shellJoin(argv)}`);
-          reinvoke(argv.slice(1) ]).then(next);
+          reinvoke(argv.slice(1)).then(next);
         },
         npm(argv, next) {
           if (argv[1] === 'run') {

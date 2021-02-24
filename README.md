@@ -71,6 +71,10 @@ If you're having an issue, please take the time to report it in the [issue
 tracker][1]. This will make the tool much more robust and easier for others to
 pick up.
 
+You can set `NODE_ENV=development` in your shell to get additional information
+about how Bake is processing the scripts. Please check the output and post
+relevant parts if you encountered a bug.
+
 ## License
 
 The code in this repository is licensed under the MIT license.

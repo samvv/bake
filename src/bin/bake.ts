@@ -5,24 +5,23 @@ import cp from "child_process";
 import fs from "fs";
 
 import npmWhich from "npm-which";
-import yargs from "yargs";
 import Minimatch from "minimatch";
 import chalk from "chalk";
 
 import {
   PrefixTransformStream,
-  toArray,
   upsearch,
   readJson,
   JsonObject,
   isObject,
   shellJoin
 } from "../util";
+
 import {
   error,
-  info,
   verbose
 } from "../logging";
+
 import {
   evalShellCommand,
   ShellCommand,
@@ -92,16 +91,6 @@ function spawnWithPrefix(argv: string[], {
 
   });
 
-}
-
-interface TaskInfo {
-  type: 'spawn';
-  name: string;
-  command: ShellCommand;
-  before: string[];
-  after: string[];
-  checkExitCode: boolean;
-  shouldFail: boolean;
 }
 
 type PackageJsonScripts = { [name: string]: string }
@@ -196,8 +185,6 @@ async function invoke(args: string[]) {
         : `no tasks matched the specified filter ${expectedTaskNames.map(taskName => `'${taskName}'`).join(' ')}.`);
     return 1;
   }
-
-  let didSpawnProcess = false;
 
   const runTask = (taskName: string): Promise<number | null> => {
 

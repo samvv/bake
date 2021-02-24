@@ -46,7 +46,7 @@ make this even more concise by naming the script `"bake"`.  For example:
   "scripts": {
     "watch:tests": "ava --watch",
     "watch:sources": "tsc -w --preserveWatchOutput",
-    "serve": "webpack serve --mode development"
+    "serve": "webpack serve --mode development",
     "prepare": "tsc --noEmit && webpack --mode production",
     "bake": "bake watch serve"
   }

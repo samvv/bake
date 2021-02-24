@@ -488,15 +488,18 @@ export interface SpawnOptions {
   env?: ProcessEnvironment;
 }
 
-type ShellCommandFn = (
+export type ShellCommandFn = (
+  this: ShellEvaluator,
   argv: string[],
   next: (exitCode: number) => void,
   exit: (exitCode: number) => void
 ) => void;
 
-interface ShellBuiltins {
+export interface ShellBuiltins {
   [key: string]: ShellCommandFn;
 }
+
+export type SpawnFn = (argv: string[], opts: SpawnOptions) => Promise<number | null>;
 
 export interface EvalShellCommandOptions {
   spawn(argv: string[], opts?: SpawnOptions): Promise<number | null>;
@@ -511,23 +514,6 @@ function shouldHoist(expr: ShellExpr): boolean {
       && expr.type !== ShellNodeType.TemplateStringExpr;
 }
 
-export function evalShellExpr(expr: ShellExpr, {
-  env = process.env,
-}) {
-  switch (expr.type) {
-    case ShellNodeType.TextExpr:
-      return expr.text;
-    case ShellNodeType.RefExpr:
-      return env[expr.name] ?? '';
-    // case ShellNodeType.TemplateStringExpr:
-    //   return expr.elements
-    //     .map(element => expandShellExpr(element, { env }))
-    //     .join('');
-    default:
-        throw new Error(`Could not evaluate shell expression: unknown node type`);
-  }
-}
-
 const DEFAULT_BUILTINS: ShellBuiltins = {
   exit([ exitCodeStr ], _next, exit) {
     if (exitCodeStr === undefined) {
@@ -536,6 +522,154 @@ const DEFAULT_BUILTINS: ShellBuiltins = {
     const exitCode = Number(exitCodeStr);
     exit(isNaN(exitCode) ? 0 : exitCode);
   }
+}
+
+export class ShellEvaluator {
+
+  constructor(
+    public cwd: string,
+    public env: ProcessEnvironment,
+    private builtins: ShellBuiltins,
+    private spawnInternal: SpawnFn,
+  ) {
+
+  }
+
+  public async spawn(argv: string[]): Promise<number> {
+    const exitCode = await this.spawnInternal(argv, {
+      cwd: this.cwd,
+      env: this.env
+    });
+    return exitCode === null ? 1 : exitCode;
+  }
+
+  public async evalShellExpr(expr: ShellExpr): Promise<string> {
+
+    switch (expr.type) {
+
+      case ShellNodeType.TextExpr:
+        return expr.text;
+
+      case ShellNodeType.RefExpr:
+        return this.env[expr.name] ?? '';
+
+      case ShellNodeType.TemplateStringExpr:
+
+        let out = '';
+
+        // We could use Promise.all but it seems that Bash just evaluates the
+        // nested expressions in sequence. For example, if you type "$(sleep 1)
+        // $(sleep 2)", the shell will sleep for 3 seconds.
+        for (const element of expr.elements) {
+          out += await this.evalShellExpr(element);
+        }
+
+        return out;
+
+      default:
+          throw new Error(`Could not evaluate shell expression: unknown node type`);
+
+    }
+
+  }
+
+
+
+  public eval(command: string | ShellCommand): Promise<number> {
+
+    const visit = async (
+      command: ShellCommand,
+      next: (exitCode: number) => void,
+      exit: (exitCode: number) => void
+    ) => {
+
+      switch (command.type) {
+
+        case ShellNodeType.SpawnCommand:
+          {
+            // The full list of process arguments for spawn() will be stored in this
+            // variable.
+            const argv: string[] = [];
+
+            // Populate argv by evaluating each parsed expression in the command.
+            // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
+            // then we split the result and add each part as a seperate argument.
+            // If the expression is not hoistable (e.g. the literal '"foo bar bax")
+            // then we just add it as a single big argument.
+            for (const arg of command.args) {
+              for (const expr of arg) {
+                const result = await this.evalShellExpr(expr);
+                if (shouldHoist(expr)) {
+                  for (const chunk of result.split(' ')) {
+                    argv.push(chunk);
+                  }
+                } else {
+                  argv.push(result);
+                }
+              }
+            }
+
+            // First we check if there is a builtin with the given name. We always
+            // give priority to the builtin, so return early if found.
+            const builtin = this.builtins[argv[0]];
+            if (builtin !== undefined) {
+              builtin.call(this, argv, next, exit);
+              break;
+            }
+
+            // If no builtin matched, we just spawn the process and hope it is
+            // somewhere in $PATH.
+            this.spawn(argv).then(next);
+
+            break;
+          }
+
+        case ShellNodeType.AndCommand:
+          {
+            // First call visit() on the left-hand side of the &&-command.
+            visit(command.left, exitCode => {
+              if (exitCode !== 0) {
+                exit(exitCode);
+              } else {
+                // If the first command exited successfully, call visit() on
+                // the right-hand side of the &&-command.
+                visit(command.right, next, exit);
+              }
+            }, exit);
+            break;
+          }
+
+        case ShellNodeType.OrCommand:
+          {
+            visit(command.left, exitCode => {
+              if (exitCode === 0) {
+                exit(0);
+              } else {
+                visit(command.right, next, exit);
+              }
+            }, exit);
+            break;
+          }
+
+        default:
+          throw new Error(`Could not evaluate shell command: unknown node`);
+
+      }
+
+    }
+
+    return new Promise(accept => {
+
+      if (typeof(command) === 'string') {
+        command = parseShellCommand(command);
+      }
+
+      visit(command, accept, accept);
+
+    });
+
+  }
+
 }
 
 export function evalShellCommand(command: string | ShellCommand, {
@@ -550,93 +684,13 @@ export function evalShellCommand(command: string | ShellCommand, {
     ? extraBuiltins
     : { ...DEFAULT_BUILTINS, ...extraBuiltins }
 
-  if (typeof(command) === 'string') {
-    command = parseShellCommand(command);
-  }
+  const evaluator = new ShellEvaluator(
+    cwd,
+    env,
+    builtins,
+    spawn
+  );
 
-  return new Promise(accept => {
-    visit(command as ShellCommand, accept, accept);
-  });
-
-  async function visit(
-    command: ShellCommand,
-    next: (exitCode: number) => void,
-    exit: (exitCode: number) => void
-  ) {
-
-    switch (command.type) {
-
-      case ShellNodeType.SpawnCommand:
-        {
-          // The full list of process arguments for spawn() will be stored in this
-          // variable.
-          const argv: string[] = [];
-
-          // Populate argv by evaluating each parsed expression in the command.
-          // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
-          // then we split the result and add each part as a seperate argument.
-          // If the expression is not hoistable (e.g. the literal '"foo bar bax")
-          // then we just add it as a single big argument.
-          for (const arg of command.args) {
-            for (const expr of arg) {
-              const result = evalShellExpr(expr, { env });
-              if (shouldHoist(expr)) {
-                for (const chunk of result.split(' ')) {
-                  argv.push(chunk);
-                }
-              } else {
-                argv.push(result);
-              }
-            }
-          }
-
-          // First we check if there is a builtin with the given name. We always
-          // give priority to the builtin, so return early if found.
-          const builtin = builtins[argv[0]];
-          if (builtin !== undefined) {
-            builtin(argv, next, exit);
-            break;
-          }
-
-          // If no builtin matched, we just spawn the process using the provided
-          // spawn() function.
-          const exitCode = await spawn(argv, { env, cwd });
-
-          // Continue with whatever exit code the proces stopped with.
-          next(exitCode === null ? 1 : exitCode);
-
-          break;
-        }
-
-      case ShellNodeType.AndCommand:
-        {
-          visit(command.left, exitCode => {
-            if (exitCode !== 0) {
-              exit(exitCode);
-            } else {
-              visit(command.right, next, exit);
-            }
-          }, exit);
-          break;
-        }
-
-      case ShellNodeType.OrCommand:
-        {
-          visit(command.left, exitCode => {
-            if (exitCode === 0) {
-              exit(0);
-            } else {
-              visit(command.right, next, exit);
-            }
-          }, exit);
-          break;
-        }
-
-      default:
-        throw new Error(`Could not evaluate shell command: unknown node`);
-
-    }
-
-  }
+  return evaluator.eval(command);
 
 }

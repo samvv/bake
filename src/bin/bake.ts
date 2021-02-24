@@ -117,12 +117,12 @@ function parseFlag(flag: string) {
   const k = flag.indexOf('=', i);
   let flagName;
   let flagValue;
-  if (k !== null) {
+  if (k !== -1) {
     flagName = flag.substr(i, k);
     flagValue = flag.substr(k+1);
   } else {
     flagName = flag.substr(i);
-    flagValue = k;
+    flagValue = null;
   }
   return [ flagName, flagValue ];
 }

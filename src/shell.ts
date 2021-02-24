@@ -488,13 +488,21 @@ export interface SpawnOptions {
   env?: ProcessEnvironment;
 }
 
-type ShellCommandFn = (argv: string[]) => Promise<number>;
+type ShellCommandFn = (
+  argv: string[],
+  next: (exitCode: number) => void,
+  exit: (exitCode: number) => void
+) => void;
+
+interface ShellBuiltins {
+  [key: string]: ShellCommandFn;
+}
 
 export interface EvalShellCommandOptions {
   spawn(argv: string[], opts?: SpawnOptions): Promise<number | null>;
   cwd?: string;
   env?: ProcessEnvironment;
-  extraBuiltins?: { [key: string]: ShellCommandFn; }
+  extraBuiltins?: ShellBuiltins,
   noDefaultBuiltins?: boolean;
 }
 
@@ -518,11 +526,16 @@ export function evalShellExpr(expr: ShellExpr, {
     default:
         throw new Error(`Could not evaluate shell expression: unknown node type`);
   }
-
 }
 
-const DEFAULT_BUILTINS = {
-
+const DEFAULT_BUILTINS: ShellBuiltins = {
+  exit([ exitCodeStr ], _next, exit) {
+    if (exitCodeStr === undefined) {
+      exit(0);
+    }
+    const exitCode = Number(exitCodeStr);
+    exit(isNaN(exitCode) ? 0 : exitCode);
+  }
 }
 
 export function evalShellCommand(command: string | ShellCommand, {
@@ -531,7 +544,7 @@ export function evalShellCommand(command: string | ShellCommand, {
   env = process.env,
   extraBuiltins = {},
   noDefaultBuiltins = false,
-}: EvalShellCommandOptions) {
+}: EvalShellCommandOptions): Promise<number> {
 
   const builtins = noDefaultBuiltins
     ? extraBuiltins
@@ -541,63 +554,82 @@ export function evalShellCommand(command: string | ShellCommand, {
     command = parseShellCommand(command);
   }
 
-  return visit(command);
+  return new Promise(accept => {
+    visit(command as ShellCommand, accept, accept);
+  });
 
-  async function visit(command: ShellCommand): Promise<number | null> {
+  async function visit(
+    command: ShellCommand,
+    next: (exitCode: number) => void,
+    exit: (exitCode: number) => void
+  ) {
 
     switch (command.type) {
 
       case ShellNodeType.SpawnCommand:
+        {
+          // The full list of process arguments for spawn() will be stored in this
+          // variable.
+          const argv: string[] = [];
 
-        // The full list of process arguments for spawn() will be stored in this
-        // variable.
-        const argv: string[] = [];
-
-        // Populate argv by evaluating each parsed expression in the command.
-        // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
-        // then we split the result and add each part as a seperate argument.
-        // If the expression is not hoistable (e.g. the literal '"foo bar bax")
-        // then we just add it as a single big argument.
-        for (const arg of command.args) {
-          for (const expr of arg) {
-            const result = evalShellExpr(expr, { env });
-            if (shouldHoist(expr)) {
-              for (const chunk of result.split(' ')) {
-                argv.push(chunk);
+          // Populate argv by evaluating each parsed expression in the command.
+          // If the expression is hoistable (e.g. $FOO expands to 'foo bar bax')
+          // then we split the result and add each part as a seperate argument.
+          // If the expression is not hoistable (e.g. the literal '"foo bar bax")
+          // then we just add it as a single big argument.
+          for (const arg of command.args) {
+            for (const expr of arg) {
+              const result = evalShellExpr(expr, { env });
+              if (shouldHoist(expr)) {
+                for (const chunk of result.split(' ')) {
+                  argv.push(chunk);
+                }
+              } else {
+                argv.push(result);
               }
-            } else {
-              argv.push(result);
             }
           }
-        }
 
-        // First we check if there is a builtin with the given name. We always
-        // give priority to the builtin, so return early if found.
-        const builtin = builtins[argv[0]];
-        if (builtin !== undefined) {
-          return builtin(argv);
-        }
+          // First we check if there is a builtin with the given name. We always
+          // give priority to the builtin, so return early if found.
+          const builtin = builtins[argv[0]];
+          if (builtin !== undefined) {
+            builtin(argv, next, exit);
+            break;
+          }
 
-        // Use the user-provided spawn-function to run an external process and
-        // return its promise.
-        return spawn(argv, { env, cwd });
+          // If no builtin matched, we just spawn the process using the provided
+          // spawn() function.
+          const exitCode = await spawn(argv, { env, cwd });
+
+          // Continue with whatever exit code the proces stopped with.
+          next(exitCode === null ? 1 : exitCode);
+
+          break;
+        }
 
       case ShellNodeType.AndCommand:
         {
-          const exitCode = await visit(command.left);
-          if (exitCode !== 0) {
-            return exitCode;
-          }
-          return visit(command.right);
+          visit(command.left, exitCode => {
+            if (exitCode !== 0) {
+              exit(exitCode);
+            } else {
+              visit(command.right, next, exit);
+            }
+          }, exit);
+          break;
         }
 
       case ShellNodeType.OrCommand:
         {
-          const exitCode = await visit(command.left);
-          if (exitCode === 0) {
-            return 0;
-          }
-          return visit(command.right);
+          visit(command.left, exitCode => {
+            if (exitCode === 0) {
+              exit(0);
+            } else {
+              visit(command.right, next, exit);
+            }
+          }, exit);
+          break;
         }
 
       default:

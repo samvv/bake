@@ -242,17 +242,23 @@ async function invoke(args: string[]): Promise<number> {
 
   const runTask = (task: TaskInfo): Promise<number | null> => {
 
-    //if (task.shellCommand === undefined) {
-    //  error(`no task named '${task.name}' found.`)
-    //  return Promise.resolve(1);
-    //}
-
     return evalShellCommand(task.shellCommand, {
       cwd: task.cwd,
       extraBuiltins: {
         bake(argv, next) {
           verbose(`Caught ${shellJoin(argv)}`);
           invoke(argv.slice(1)).then(next);
+        },
+        npm(argv, next) {
+          if (argv[1] === 'run') {
+            verbose(`Caught ${shellJoin(argv)}`);
+            invoke(argv.slice(2)).then(next);
+          } else if (argv[1] === 'test' || argv[1] === 'start') {
+            verbose(`Caught ${shellJoin(argv)}`);
+            invoke(argv.slice(1)).then(next);
+          } else {
+            this.spawn(argv).then(next);
+          }
         }
       },
       spawn: (args, opts) => {

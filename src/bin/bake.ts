@@ -6,6 +6,7 @@ import fs from "fs";
 
 import npmWhich from "npm-which";
 import Minimatch from "minimatch";
+import yargs, {ToArray} from "yargs";
 import chalk from "chalk";
 
 import {
@@ -14,7 +15,8 @@ import {
   readJson,
   isObject,
   shellJoin,
-  getObjectEntries
+  getObjectEntries,
+  toArray
 } from "../util";
 
 import {
@@ -107,39 +109,6 @@ interface PackageJson {
 type PackageJsonScripts = { [name: string]: string }
 type PackageJsonWorkspaces = string[];
 
-function parseFlag(flag: string) {
-  let i;
-  for (i = 0; i < flag.length; i++) {
-    if (flag[i] !== '-') {
-      break;
-    }
-  }
-  const k = flag.indexOf('=', i);
-  let flagName;
-  let flagValue;
-  if (k !== -1) {
-    flagName = flag.substr(i, k);
-    flagValue = flag.substr(k+1);
-  } else {
-    flagName = flag.substr(i);
-    flagValue = null;
-  }
-  return [ flagName, flagValue ];
-}
-
-interface InvokeOptions {
-  /**
-   * Overrides the current working directory of this invocation. Note that even
-   * if --work-dir=/path/to/foo is provided in the arguments this option will
-   * get priority.
-   */
-  cwd?: string;
-  /**
-   * Whether to give a warning when the user ran Bake and nothing happened.
-   */
-  ignoreEmptyScripts?: boolean;
-}
-
 interface TaskInfo {
   name: string;
   shellCommand: string;
@@ -163,44 +132,59 @@ async function* loadTasks(packageDir: string): AsyncGenerator<TaskInfo> {
   }
 }
 
-async function invoke(args: string[]): Promise<number> {
+function invoke(rawArgs: string[]): Promise<number> {
 
-  let cwd = process.cwd();
-  const expectedTaskNames: string[] = [];
+  return new Promise(accept => {
 
-  let i;
+    yargs
 
-  for (i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('-')) {
-      let [flagName, flagValue] = parseFlag(arg);
-      if (flagName === 'C' || flagName === 'work-dir') {
-        if (flagValue === null) {
-          flagValue = args[++i];
-          if (flagValue === undefined) {
-            error(`${arg} did not receive a value`);
-            return 1;
+      .command(
+
+        '$0 [tasks..]', 'Run some scripts defined in package.json',
+
+        yargs => yargs
+          .describe('tasks', 'What tasks to run')
+          .boolean('local')
+          .describe('local', 'Allow using a local installation of Bake')
+          .default('local', true)
+          .string('work-dir')
+          .describe('work-dir', 'Act as if run from this directory')
+          .alias('C', 'work-dir')
+          .default('work-dir', '.'),
+
+        args => {
+
+          const expectedTaskNames = toArray(args.tasks as string | string[]);
+          const cwd = path.resolve(args['work-dir'] as string);
+          const allowRespawn = args['local'];
+
+          const bakeBinPath = npmWhich(cwd).sync('bake');
+
+          if (allowRespawn && bakeBinPath && fs.realpathSync(__filename) !== fs.realpathSync(bakeBinPath)) {
+            verbose(`Re-spawning with local installation of Bake`);
+            const exitCode = cp.spawnSync(bakeBinPath, [ '--no-local', ...rawArgs ], { stdio: 'inherit', }).status;
+            accept(exitCode === null ? 1 : exitCode);
           }
-        }
-        if (cwd === undefined) {
-          cwd = path.resolve(flagValue);
-        }
-      } else {
-        error(`${arg} was not recognised as a valid command-line flag by Bake`)
-        return 1;
-      }
-    } else {
-      expectedTaskNames.push(arg);
-    }
-  }
 
-  const bakeBinPath = npmWhich(cwd).sync('bake');
+          bake(expectedTaskNames, { cwd }).then(accept);
 
-  if (bakeBinPath && fs.realpathSync(__filename) !== fs.realpathSync(bakeBinPath)) {
-    verbose(`Re-spawning with local installation of Bake`);
-    const exitCode = cp.spawnSync(bakeBinPath, args, { stdio: 'inherit', }).status;
-    return exitCode === null ? 1 : exitCode;
-  }
+        }
+
+      )
+
+      .parse(rawArgs);
+
+  });
+
+}
+
+function reinvoke(rawArgs: string[]) {
+  return invoke([ '--no-local', ...rawArgs ]);
+}
+
+async function bake(expectedTaskNames: string[], {
+  cwd = process.cwd()
+}): Promise<number> {
 
   if (expectedTaskNames.length === 0) { 
     expectedTaskNames.push('bake');
@@ -247,15 +231,15 @@ async function invoke(args: string[]): Promise<number> {
       extraBuiltins: {
         bake(argv, next) {
           verbose(`Caught ${shellJoin(argv)}`);
-          invoke(argv.slice(1)).then(next);
+          reinvoke(argv.slice(1) ]).then(next);
         },
         npm(argv, next) {
           if (argv[1] === 'run') {
             verbose(`Caught ${shellJoin(argv)}`);
-            invoke(argv.slice(2)).then(next);
+            reinvoke(argv.slice(2)).then(next);
           } else if (argv[1] === 'test' || argv[1] === 'start') {
             verbose(`Caught ${shellJoin(argv)}`);
-            invoke(argv.slice(1)).then(next);
+            reinvoke(argv.slice(1)).then(next);
           } else {
             this.spawn(argv).then(next);
           }

@@ -53,7 +53,12 @@ make this even more concise by naming the script `"bake"`.  For example:
 }
 ```
 
-If you run `bake` with the above configuration your two tasks will run in parallel.
+If you run `bake` with the above configuration your two tasks will run in
+parallel.
+
+Bake also supports npm/yarn workspaces. When run from the root of the
+workspace, the program will look up all subprojects and run scripts that
+matched the given pattern from each subproject.
 
 ## Bugs And Issues
 

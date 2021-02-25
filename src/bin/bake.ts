@@ -132,7 +132,11 @@ async function* loadTasks(packageDir: string): AsyncGenerator<TaskInfo> {
   }
 }
 
-function invoke(rawArgs: string[]): Promise<number> {
+interface InvokeOptions {
+  cwd?: string;
+}
+
+function invoke(rawArgs: string[], { cwd }: InvokeOptions = {}): Promise<number> {
 
   return new Promise(accept => {
 
@@ -155,7 +159,9 @@ function invoke(rawArgs: string[]): Promise<number> {
         args => {
 
           const expectedTaskNames = toArray(args.tasks as string | string[]);
-          const cwd = path.resolve(args['work-dir'] as string);
+          if (cwd === undefined) {
+            cwd = path.resolve(args['work-dir'] as string);
+          }
           const allowRespawn = args['local'];
 
           const bakeBinPath = npmWhich(cwd).sync('bake');
@@ -178,8 +184,8 @@ function invoke(rawArgs: string[]): Promise<number> {
 
 }
 
-function reinvoke(rawArgs: string[]) {
-  return invoke([ '--no-local', ...rawArgs ]);
+function reinvoke(rawArgs: string[], opts: InvokeOptions = {}) {
+  return invoke([ '--no-local', ...rawArgs ], opts);
 }
 
 async function bake(expectedTaskNames: string[], {
@@ -231,15 +237,15 @@ async function bake(expectedTaskNames: string[], {
       extraBuiltins: {
         bake(argv, next) {
           verbose(`Caught ${shellJoin(argv)}`);
-          reinvoke(argv.slice(1)).then(next);
+          reinvoke(argv.slice(1), { cwd: this.cwd }).then(next);
         },
         npm(argv, next) {
           if (argv[1] === 'run') {
             verbose(`Caught ${shellJoin(argv)}`);
-            reinvoke(argv.slice(2)).then(next);
+            reinvoke(argv.slice(2), { cwd: this.cwd }).then(next);
           } else if (argv[1] === 'test' || argv[1] === 'start') {
             verbose(`Caught ${shellJoin(argv)}`);
-            reinvoke(argv.slice(1)).then(next);
+            reinvoke(argv.slice(1), { cwd: this.cwd }).then(next);
           } else {
             this.spawn(argv).then(next);
           }

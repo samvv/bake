@@ -6,7 +6,7 @@ import fs from "fs";
 
 import npmWhich from "npm-which";
 import Minimatch from "minimatch";
-import yargs, {ToArray} from "yargs";
+import yargs from "yargs";
 import chalk from "chalk";
 
 import {

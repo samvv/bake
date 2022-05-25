@@ -7,8 +7,8 @@
     "bake": "lib/bin/bake.js"
   },
   "scripts": {
-    "prepare": "tsc",
-    "watch:compile": "tsc -w --preserveWatchOutput",
+    "prepare": "babel src --out-dir lib -x .ts",
+    "watch:compile": "babel --watch src --out-dir lib -x .ts",
     "watch:test": "ava --watch",
     "bake": "bake watch",
     "test": "ava"
@@ -35,15 +35,19 @@
   },
   "homepage": "https://github.com/samvv/BakeJS#readme",
   "devDependencies": {
+    "@babel/cli": "^7.17.10",
+    "@babel/preset-env": "^7.18.2",
+    "@babel/preset-typescript": "^7.17.12",
     "@types/fs-extra": "^9.0.13",
     "@types/minimatch": "^3.0.5",
     "@types/node": "^17.0.35",
     "@types/npm-which": "^3.0.1",
     "@types/yargs": "^17.0.10",
-    "ava": "^4.2.0"
+    "ava": "^4.2.0",
+    "typescript": "^4.7.2"
   },
   "dependencies": {
-    "chalk": "^5.0.1",
+    "chalk": "^4.1.2",
     "fs-extra": "^10.1.0",
     "minimatch": "^5.1.0",
     "node-pty": "^0.10.1",

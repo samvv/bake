@@ -5,6 +5,10 @@ Bake supercharges the `scripts` entry in your `package.json`. Using Bake, you
 can parallelize your build with very little effort and keep your log files
 clean. Oh, and you also get full support for Bash scripts, even on Windows!
 
+```bash
+npm i -g @samvv/bake
+```
+
 ## How It Works
 
 Bake acts like a little shell and parses whatever you have inside your`scripts`

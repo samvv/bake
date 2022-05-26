@@ -1,6 +1,6 @@
 {
   "name": "@samvv/bake",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Supercharge your npm build scripts",
   "main": "dist/index.js",
   "bin": {

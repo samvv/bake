@@ -3,8 +3,8 @@
 import path from "path";
 import cp from "child_process";
 import fs from "fs";
+import which from "which";
 
-import npmWhich from "npm-which";
 import Minimatch from "minimatch";
 import yargs from "yargs";
 import chalk from "chalk";
@@ -53,17 +53,51 @@ function matchTaskName(taskName: string, expected: string[]): boolean {
   return false;
 }
 
+async function pathExists(filepath: string) {
+  try {
+    await fs.promises.access(filepath, fs.constants.F_OK);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
+async function npmWhich(command: string, {
+  startDir = process.cwd(),
+}): Promise<string | null> {
+  let currDir = startDir; 
+  for (;;) {
+    const binPath = path.join(currDir, 'node_modules', '.bin', command);
+    if (await pathExists(binPath)) {
+      return binPath;
+    }
+    const { root, dir } = path.parse(currDir);
+    if (root === dir) {
+      break;
+    }
+    currDir = dir;
+  }
+  return which(command);
+}
+
 function spawnWithPrefix(argv: string[], {
   cwd = process.cwd(),
   env = process.env,
   prefix = '',
 }: SpawnOptions & { prefix?: string }): Promise<number | null> {
 
-  return new Promise((accept, reject) => {
+  return new Promise(async (accept, reject) => {
 
     const [progName, ...args] = argv;
 
-    const progPath = npmWhich.sync(progName, { cwd });
+    const progPath = await npmWhich(progName, { startDir: cwd });
+
+    if (progPath === null) {
+      throw new Error(`Command '${progName}' not found in node_modules or in PATH.`);
+    }
 
     const childProcess = cp.spawn(progPath, args, {
       cwd,
@@ -156,7 +190,7 @@ function invoke(rawArgs: string[], { cwd }: InvokeOptions = {}): Promise<number>
           .alias('C', 'work-dir')
           .default('work-dir', '.'),
 
-        args => {
+        async (args) => {
 
           const expectedTaskNames = toArray(args.tasks as string | string[]);
           if (cwd === undefined) {
@@ -164,7 +198,7 @@ function invoke(rawArgs: string[], { cwd }: InvokeOptions = {}): Promise<number>
           }
           const allowRespawn = args['local'];
 
-          const bakeBinPath = npmWhich(cwd).sync('bake');
+          const bakeBinPath = await npmWhich('bake', { startDir: cwd });
 
           if (allowRespawn && bakeBinPath && fs.realpathSync(__filename) !== fs.realpathSync(bakeBinPath)) {
             verbose(`Re-spawning with local installation of Bake`);

@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "chalk": "^4.1.0",
-    "fs-extra": "^9.1.0",
+    "fs-extra": "^10.0.0",
     "minimatch": "^3.0.4",
     "node-pty": "^0.10.0",
     "npm-which": "^3.0.1",

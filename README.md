@@ -1,13 +1,16 @@
 Bake
 ====
 
-Bake supercharges the `scripts` entry in your `package.json`. Using Bake, you
-can parallelize your build with very little effort and keep your log files
-clean. Oh, and you also get full support for Bash scripts, even on Windows!
+Bake is a build tool that supercharges the `scripts` entry in your
+`package.json`. Using Bake, you can parallelize your build with very little
+effort and keep your log files clean. Oh, and you also get some support for
+Bash scripts, even on Windows!
 
 ```bash
 npm i -g @samvv/bake
 ```
+
+**[Tutorial](https://medium.com/the-daily-coder/supercharge-your-javascript-build-scripts-with-bake-282279b40c7a)**
 
 ## How It Works
 

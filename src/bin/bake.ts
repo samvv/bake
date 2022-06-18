@@ -39,11 +39,11 @@ function countChars(str: string, needle: string) {
   return count;
 }
 
-function matchTaskName(taskName: string, expected: string[]): boolean {
-  if (expected.length === 0) {
+function matchTaskName(taskName: string, patterns: string[]): boolean {
+  if (patterns.length === 0) {
     return true;
   }
-  for (const pattern of expected) {
+  for (const pattern of patterns) {
     const k = countChars(pattern, ':');
     const taskNamePart = taskName.split(':').slice(0, k+1).join(':');
     if (Minimatch(taskNamePart, pattern)) {
@@ -57,7 +57,7 @@ async function pathExists(filepath: string) {
   try {
     await fs.promises.access(filepath, fs.constants.F_OK);
   } catch (error) {
-    if (error.code === 'ENOENT') {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return false;
     }
     throw error;
@@ -206,7 +206,7 @@ function invoke(rawArgs: string[], { cwd }: InvokeOptions = {}): Promise<number>
             accept(exitCode === null ? 1 : exitCode);
           }
 
-          bake(expectedTaskNames, { cwd }).then(accept);
+          accept(await bake(expectedTaskNames, { cwd }));
 
         }
 
